@@ -1,5 +1,5 @@
 /*------------------------------------------------------------------------------------------------------
-                              Author : Evan Richinson aka MrRetupmoc42
+Author : Evan Richinson aka MrRetupmoc42
                
 Adalogger Solar Panel Power Tracker to SD Card
    Stores Calculated Values from Analog Voltage Input
@@ -15,18 +15,27 @@ December 30th 2015 : Data Poll, Calculations and Storage
 December 31st 2015 : Cleanup of Storage and Started MultiStore
 January 1st 2016   : "MTC ( MicroProcessor Time Clock )" and Max Time Values
 January 2nd 2016   : Storage Update for MTC, Now MultiStores S,M,H,D and Y and Linerization Added to Calculations
-
+->January 2nd 2016 : Daniel Schimmer -> Inserted before the predicted January 3rd update! ;) - Play around formatting and 'optimization'
 January 3rd 2016   : Storage Array for Average Values
-                   
--------------------------------------------------------------------------------------------------------*/
 
-//SD Card Setup and File Delimiters
+Sketch stats before:
+
+Sketch uses 24,296 bytes (84%) of program storage space. Maximum is 28,672 bytes.
+Global variables use 1,782 bytes (69%) of dynamic memory, leaving 778 bytes for local variables. Maximum is 2,560 bytes.
+
+Sketch stats now:
+
+Sketch uses 17,480 bytes (60%) of program storage space. Maximum is 28,672 bytes.
+Global variables use 934 bytes (36%) of dynamic memory, leaving 1,626 bytes for local variables. Maximum is 2,560 bytes.
+
+Still playing.....
+
+-------------------------------------------------------------------------------------------------------*/
+#include "PetitFS.h"
 #include <SPI.h>
-#include <SD.h>
-  const int chipSelect = 4;
-  String dataString = "";
-  String Split = "/";
-  String End = ".";
+
+// Petite FS
+FATFS fs;
 
 //Pin Setup and Calculation Data
 #define StatusLed 13
@@ -34,55 +43,39 @@ January 3rd 2016   : Storage Array for Average Values
 #define VBatLeadAcid A2
 #define VSolar A0
 #define ISolar A1
-  float MeasuredVBatLipo;
-  float MeasuredVBatLeadAcid;
-  float MeasureVSolarPanel;
-  float MeasureISolarPanel;
-  float MeasureWSolarPanel;
+  
+String dataString = "";
+const String Split = "/";
+const String End = ".";
 
-  float UnderVBatLipo = 3.300;               //Set Under Voltage Lipo
-  float UnderVBatLeadAcid = 10.500;          //Set Under Voltage Lead Acid
+float MeasuredVBatLipo;
+float MeasuredVBatLeadAcid;
+float MeasureVSolarPanel;
+float MeasureISolarPanel;
+float MeasureWSolarPanel;
 
-  bool LipoUnderChargedVoltage = false;      //
-  bool LeadAcidUnderChargedVoltage = false;  //
-  bool PanalUnderChargeVoltage = false;      //Cloudy or Night Time?
-  bool PanalAtChargeVoltage = false;         //Charging the Battery
-  bool PanalOverChargeVoltage = false;       //Sunny But Don't Need to Charge
+float UnderVBatLipo = 3.300;               //Set Under Voltage Lipo
+float UnderVBatLeadAcid = 10.500;          //Set Under Voltage Lead Acid
 
-  bool Debug = true;
-  int VoltageOffset = 1;
+bool LipoUnderChargedVoltage = false;      //
+bool LeadAcidUnderChargedVoltage = false;  //
+bool PanelUnderChargeVoltage = false;      //Cloudy or Night Time?
+bool PanelAtChargeVoltage = false;         //Charging the Battery
+bool PanelOverChargeVoltage = false;       //Sunny But Don't Need to Charge
+
+const bool Debug = true;
+const int VoltageOffset = 1;
 
 //This is the "MTC ( MicroProcessor Time Clock )" Setup
-  int CalcTimeOffset = 59; //mS, +50mS for LED Flash, The Offset to Correct for a Second of Time
+const int CalcTimeOffset = 59; //mS, +50mS for LED Flash, The Offset to Correct for a Second of Time
 
-  int SecondCount_Max = 60;  //60 Sec per Min
-  int MinuteCount_Max = 60; //60 Min per Hour
-  int HourCount_Max = 24;    //24 Hours per Day
-  int DayCount_Max = 365;    //365 Days per Year
-  int YearCount_Max = 10;    //10 Years worth of Logs....
-  
-  int SecondCount = -1;      //-1 --> Init Print the Data Lines Names to .TXT
-  int MinuteCount = 0;
-  int HourCount = 0;
-  int DayCount = 0;
-  int YearCount = 0;
+const int SecondCount_Max = 60;  //60 Sec per Min
+const int MinuteCount_Max = 60; //60 Min per Hour
+const int HourCount_Max = 24;    //24 Hours per Day
+const int DayCount_Max = 365;    //365 Days per Year
+const int YearCount_Max = 10;    //10 Years worth of Logs....
 
-//Storage Array to Create the Average Values From
-  const int dataspots = 4;
-/*
-int CapturesperMinuite[MinuiteCount_Max,dataspots];
-  int CapturesperHour[HourCount_Max,dataspots];
-  int CapturesperDay[DayCount_Max,dataspots]; 
-  int CapturesperYear[YearCount_Max,dataspots];
-
-int[4] MinuiteAverage;
-  int[4] HourAverage;
-  int[4] DayAverage;
-  int[4] CapturesperYear;
-*/
-
-//Peek Values ( Dunno Yet )
-
+uint32_t time_in_seconds = 0;
 
 //---------------------------------------------------------------------------------------------------------------------------------------
 
@@ -94,12 +87,14 @@ void setup() {
   delay(5000); //while (!Serial) { }
   digitalWrite(StatusLed, LOW);
 
-  if (Serial) Serial.println("Full Mode Initialiazation");
-    if (!SD.begin(chipSelect)) {
-      if (Serial) Serial.println("Card failed, or not present");
-      return;
-    }
-  if (Serial) Serial.println("Card Save Enabled.");
+  debug("Full Mode Initialiazation");
+    
+  if (pf_mount(&fs)) {
+    debug("Card failed, or not present");
+    return;
+  }
+
+  debug("Card Save Enabled.");
   
   digitalWrite(StatusLed, HIGH);
   delay(2000);
@@ -110,7 +105,15 @@ void setup() {
 //-------------------------------------------------------------------------------------------------------------------------------------
 
 void loop() {
+  // get time's..instead of tracking in global vars
+  uint16_t years = time_in_seconds / 60 / 60 / 24 / 365;
+  uint16_t days = (time_in_seconds / 60 / 60 / 24) % 365;
+  uint16_t hours = (time_in_seconds / 60 / 60) % 24;
+  uint16_t minutes = (time_in_seconds / 60) % 60;
+  uint16_t seconds = time_in_seconds % 60;
+
   //Start Indication of a Poll
+  
   digitalWrite(StatusLed, HIGH);
   delay(50);
   
@@ -183,147 +186,120 @@ void loop() {
   //Panel Wattage Calulation ( Simple )
   MeasureWSolarPanel = MeasureVSolarPanel * MeasureISolarPanel;
 
-
   //Logic Statements ---------------------------------------------------------------------------------------------------------------------
 
-  if (MeasuredVBatLipo <= UnderVBatLipo) LipoUnderChargedVoltage = true;
-  else LipoUnderChargedVoltage = false;
+  if (MeasuredVBatLipo <= UnderVBatLipo) {
+    LipoUnderChargedVoltage = true;
+  } else {
+    LipoUnderChargedVoltage = false;
+  }
 
-  if (MeasuredVBatLeadAcid <= UnderVBatLeadAcid) LeadAcidUnderChargedVoltage = true;
-  else {
+  if (MeasuredVBatLeadAcid <= UnderVBatLeadAcid) {
+    LeadAcidUnderChargedVoltage = true;
+  } else {
     LeadAcidUnderChargedVoltage = false;
     
     if (MeasureVSolarPanel < (MeasuredVBatLeadAcid - VoltageOffset)) {
-      PanalUnderChargeVoltage = true;
-      PanalAtChargeVoltage = false;
-      PanalOverChargeVoltage = false;
-    }
-    else if(MeasureVSolarPanel >= (MeasuredVBatLeadAcid - VoltageOffset) && MeasureVSolarPanel <= (MeasuredVBatLeadAcid + VoltageOffset)) {
-      PanalUnderChargeVoltage = false;
-      PanalAtChargeVoltage = true;
-      PanalOverChargeVoltage = false;
-    }
-    else if (MeasureVSolarPanel > (MeasuredVBatLeadAcid - VoltageOffset)) {
-      PanalUnderChargeVoltage = false;
-      PanalAtChargeVoltage = false;
-      PanalOverChargeVoltage = true;
+      PanelUnderChargeVoltage = true;
+      PanelAtChargeVoltage = false;
+      PanelOverChargeVoltage = false;
+    } else if(MeasureVSolarPanel >= (MeasuredVBatLeadAcid - VoltageOffset) && MeasureVSolarPanel <= (MeasuredVBatLeadAcid + VoltageOffset)) {
+      PanelUnderChargeVoltage = false;
+      PanelAtChargeVoltage = true;
+      PanelOverChargeVoltage = false;
+    } else if (MeasureVSolarPanel > (MeasuredVBatLeadAcid - VoltageOffset)) {
+      PanelUnderChargeVoltage = false;
+      PanelAtChargeVoltage = false;
+      PanelOverChargeVoltage = true;
     }
   }
 
   if (MeasureVSolarPanel <= 0  || MeasureVSolarPanel <= 0 && LeadAcidUnderChargedVoltage) {
-    PanalUnderChargeVoltage = false;
-    PanalAtChargeVoltage = false;
-    PanalOverChargeVoltage = false;
+    PanelUnderChargeVoltage = false;
+    PanelAtChargeVoltage = false;
+    PanelOverChargeVoltage = false;
   }
   
 
   //Serial Out the Values ------------------------------------------------------------------------------------------------------------------
   if (Serial) {
-    Serial.println("");
-    Serial.println("********************************");
-    Serial.print("Lipo Bat Voltage : " );
-    Serial.println(MeasuredVBatLipo);
-      if(LipoUnderChargedVoltage) Serial.println("Lipo Backup is Under Charged, Sleeping");
-      else Serial.println("Lipo Backup is Good to GO");
-    Serial.println("-------------------------------");
-    Serial.print("Lead Acid Bat Voltage : " );
-    Serial.println(MeasuredVBatLeadAcid);
-      if(LeadAcidUnderChargedVoltage) Serial.println("LeadAcid Backup is Under Charged...");
-      else Serial.println("LeadAcid Backup is Ready");
-    Serial.println("-------------------------------");
-    Serial.print("Solar Panel Voltage : " );
-    Serial.println(MeasureVSolarPanel);
-    Serial.print("Solar Panel Current : " );
-    Serial.println(MeasureISolarPanel);
-    Serial.print("Solar Panel Wattage : " );
-    Serial.println(MeasureWSolarPanel);
-      if (!PanalUnderChargeVoltage && !PanalAtChargeVoltage && !PanalOverChargeVoltage) Serial.println("No Solar Panel Found");
-      else if(PanalUnderChargeVoltage) Serial.println("Not Enough Voltage to Charge");
-      else if(PanalAtChargeVoltage) Serial.println("Charging Backup Battery");
-      else if(PanalOverChargeVoltage) Serial.println("Float / Done Charging / Backup Battery");
-      else Serial.println("Not Charging");
-    Serial.println("********************************");
+    debug("");
+    debug("********************************");
+    debug("Lipo Bat Voltage : %f", MeasuredVBatLipo);
+
+    if(LipoUnderChargedVoltage) {
+      debug("Lipo Backup is Under Charged, Sleeping");
+    } else {
+      debug("Lipo Backup is Good to GO");
+    }
+
+    debug("-------------------------------");
+    debug("Lead Acid Bat Voltage : %f", MeasuredVBatLeadAcid);
+
+    if (LeadAcidUnderChargedVoltage) {
+      debug("LeadAcid Backup is Under Charged...");
+    } else {
+      debug("LeadAcid Backup is Ready");
+    }
+
+    debug("-------------------------------");
+    debug("Solar Panel Voltage : %f", MeasureVSolarPanel);
+    debug("Solar Panel Current : %2f", MeasureISolarPanel);
+    debug("Solar Panel Wattage : %2f", MeasureWSolarPanel);
+    
+    if (!PanelUnderChargeVoltage && !PanelAtChargeVoltage && !PanelOverChargeVoltage) {
+      debug("No Solar Panel Found");
+    } else if(PanelUnderChargeVoltage) {
+      debug("Not Enough Voltage to Charge");
+    } else if(PanelAtChargeVoltage) {
+      debug("Charging Backup Battery");  
+    } else if(PanelOverChargeVoltage) {
+      debug("Float / Done Charging / Backup Battery");
+    } else {
+      debug("Not Charging");
+    }
+    
+    debug("********************************");
   }
-  
+
   //Datalog Spreadsheet Setup ------------------------------------------------------------------------------------------------------------------
 
-  if(SecondCount < 0) { //Startup Print Values?
-    //Datalog Spreadsheet Setup
-    dataString = "Year" + Split + "Day" + Split + "Hour" + Split + "Minute" + Split + 
-      "Second" + Split + "LipoBat_V" + Split + "LeadAcidBat_V" + Split + "SolarPanel_V" + Split + 
-      "SolarPanel_I" + Split + "SolarPanel_W" + Split + "Temperature" + Split + "Humidity" + End;
-  }
-  else { //Normal Operation
+  if(time_in_seconds < 0) { //Startup Print Values?
+    dataString = F("Year/Day/Hour/Minute/Second/LipoBat_V/LeadAcidBat_V/SolarPanel_V/SolarPanel_I/SolarPanel_W/Temperature/Humidity.");
+  } else { //Normal Operation
   //Storage Array :   Year,                       Day,                       Hour,                       Minute,
-  dataString = String(YearCount) + Split + String(DayCount) + Split + String(HourCount) + Split + String(MinuteCount) + Split + 
+    dataString = String(years) + Split + String(days) + Split + String(hours) + Split + String(minutes) + Split + 
     //     Second,                       LipoBat_V,                         LeadAcidBat_V,                         SolarPanel_V,
-    String(SecondCount) + Split + String(MeasuredVBatLipo) + Split + String(MeasuredVBatLeadAcid) + Split + String(MeasureVSolarPanel) + Split +
+    String(seconds) + Split + String(MeasuredVBatLipo) + Split + String(MeasuredVBatLeadAcid) + Split + String(MeasureVSolarPanel) + Split +
     //     SolarPanel_I,                        SolarPanel_W,                        Temperature,        Humidity.
     String(MeasureISolarPanel) + Split + String(MeasureWSolarPanel) + Split + String(0) + Split + String(0) + End;
   }
 
-  //Datalog the Data that I Captured each Second;
-  if (SecondCount < SecondCount_Max) {// && PanalAtChargeVoltage && ) { //Second Tick Capture
-    File datalogFile_Sec = SD.open("sec.txt", FILE_WRITE);
-      if (datalogFile_Sec) {
-        datalogFile_Sec.println(dataString);
-        datalogFile_Sec.close();
-        if (Serial) Serial.println("Updated Second_Datalog.txt");
-        if (Serial && Debug) Serial.println(dataString);
-      }
-      else if (Serial) Serial.println("Error Opening Second_Datalog.txt");
-    //Save to the Array for Averaging Later
-
-    //CapturesperMinuite[SecondCount, Dataspot] = 0;
-  }
-
-  if (SecondCount >= SecondCount_Max) { //Second Tick 60s Meaning 1 Min Capture
-    File datalogFile_Min = SD.open("min.txt", FILE_WRITE);
-      if (datalogFile_Min) {
-        datalogFile_Min.println(dataString);
-        datalogFile_Min.close();
-        if (Serial) Serial.println("Updated Minuite_Datalog.txt");
-      }
-      else if (Serial) Serial.println("Error Opening Minuite Datalog.txt");
-      //Save to the Array for Averaging Later
-
-      //CapturesperHour[SecondCount, Dataspot] = 0;
-  }
-
-  if (MinuteCount >= MinuteCount_Max) { //Min Tick 60m Meaning 1 Hour Capture
-    File datalogFile_Hour = SD.open("hour.txt", FILE_WRITE);
-      if (datalogFile_Hour) {
-        datalogFile_Hour.println(dataString);
-        datalogFile_Hour.close();
-        if (Serial) Serial.println("Updated Hour_Datalog.txt");
-      }
-      else if (Serial) Serial.println("Error Opening Minuite Datalog.txt");
-      //Save to the Array for Averaging Later
-
-      //CapturesperHour[SecondCount, Dataspot] = 0;
-  }
-
-  if (HourCount >= HourCount_Max) { //Hour Tick 24h Meaning 1 Day Capture
-  File datalogFile_Day = SD.open("day.txt", FILE_WRITE);
-    if (datalogFile_Day) {
-      datalogFile_Day.println(dataString);
-      datalogFile_Day.close();
-      if (Serial) Serial.println("Updated Day_Datalog.txt");
-    }
-    else if (Serial) Serial.println("Error Opening Day Datalog.txt");
-    //Save to the Array for Averaging Later
-
-    //CapturesperYear[SecondCount, Dataspot] = 0;
-  }
+  // XXX: Need to look at these ifs after changing time determination....funny assumption here...
   
-  if (DayCount >= DayCount_Max) { //Day Tick 365d Meaning 1 Year Capture
-  File datalogFile_Year = SD.open("year.txt", FILE_WRITE);
-    if (datalogFile_Year) {
-      datalogFile_Year.println(dataString);
-      datalogFile_Year.close();
-      if (Serial) Serial.println("Updated Year_Datalog.txt");
-    }
-    else if (Serial) Serial.println("Error Opening Year Datalog.txt");
+  //Datalog the Data that I Captured each Second;
+  if (seconds < SecondCount_Max) {
+    // Second Tick Capture
+    writeLog(F("sec.txt"), dataString);
+  }
+
+  if (seconds >= SecondCount_Max) { //Second Tick 60s Meaning 1 Min Capture
+    writeLog(F("min.txt"), dataString);
+  }
+
+  if (minutes >= MinuteCount_Max) {
+    //Min Tick 60m Meaning 1 Hour Capture
+    writeLog(F("hour.txt"), dataString);
+  }
+
+  if (hours >= HourCount_Max) {
+    //Hour Tick 24h Meaning 1 Day Capture
+    writeLog(F("day.txt"), dataString);
+  }
+
+  if (days >= DayCount_Max) {
+    //Day Tick 365d Meaning 1 Year Capture
+    writeLog(F("year.txt"), dataString);
   }
 
   //YearCount >= YearCount_Max //Year Tick 10y Meaning 1 Decade?
@@ -331,47 +307,102 @@ void loop() {
   //End Data Poll ------------------------------------------------------------------------------------------
   digitalWrite(StatusLed, LOW);
   
-  if (PanalAtChargeVoltage && !LipoUnderChargedVoltage) {
+  if (PanelAtChargeVoltage && !LipoUnderChargedVoltage) {
     delay(1000 - CalcTimeOffset); //Should be Charging, Watch this Data Closely
-    SecondCount += 1;
+    time_in_seconds += 1;
   }
-  else if (PanalOverChargeVoltage && !LipoUnderChargedVoltage) {
+  else if (PanelOverChargeVoltage && !LipoUnderChargedVoltage) {
     delay(5000 - CalcTimeOffset); //Whats the Sun Levels Like?
-    SecondCount += 5;
+    time_in_seconds += 5;
   }
-  else if (PanalUnderChargeVoltage && !LipoUnderChargedVoltage) {
+  else if (PanelUnderChargeVoltage && !LipoUnderChargedVoltage) {
     delay(15000 - CalcTimeOffset); //Still want to know what the sun levels are like when low
-    SecondCount += 14;
+    time_in_seconds += 14;
   }
-  else if (!PanalUnderChargeVoltage && !PanalAtChargeVoltage && !PanalOverChargeVoltage && !LipoUnderChargedVoltage) {
+  else if (!PanelUnderChargeVoltage && !PanelAtChargeVoltage && !PanelOverChargeVoltage && !LipoUnderChargedVoltage) {
     delay(30000 - CalcTimeOffset); //5min, 1s Datalog Feed if not Charging and Above 0V ( Cloudy / Night Mode )
-    SecondCount += 30;
+    time_in_seconds += 30;
   }
   else {
     delay(60000 - CalcTimeOffset);  //I Dunno what the stare of the System is...
-    SecondCount += SecondCount_Max;
-  }
-
-
-  
-  //Set Some Loosed Based MTC Time for Graphing / Keeping Time
-  if (SecondCount >= SecondCount_Max) {
-    SecondCount -= SecondCount_Max;
-    MinuteCount += 1;
-  }
-  if (MinuteCount >= MinuteCount_Max) {
-    MinuteCount -= MinuteCount_Max;
-    HourCount += 1;
-  }
-  if (HourCount >= HourCount_Max) {
-    HourCount -= HourCount_Max;
-    DayCount += 1;
-  }
-  if (DayCount >= DayCount_Max) {
-    DayCount -= DayCount_Max;
-    YearCount += 1;
-  }
-  if (YearCount >= YearCount_Max) {
-    YearCount -= YearCount_Max;
+    time_in_seconds += 60;
   }
 }
+
+void writeLog(const __FlashStringHelper *fsh, String dataString) {
+  //File datafile = SD.open(fileName, FILE_WRITE);
+  char fileName[32];
+
+  // XXX: find a safe..err smarter...er intell....err non-potential-boom-boom way of doing this..BOOM
+  strcpy_P(fileName, (PGM_P)fsh);
+
+  int result = pf_open(fileName);
+  
+  if (result == FR_OK) {
+      //datafile.println(dataString);
+      pf_write(dataString.c_str(), 0, 0);
+
+      debug("Updated %s", fileName);
+    
+
+    if (Debug) {
+      debug(dataString.c_str());
+    }
+  } else {
+    debug("Error Opening %s, %d", fileName, result);
+  }
+}
+
+// handles nastyness of logging with serial, needs work.
+int debug(const char *str, ...) //Variadic Function
+{
+  int i, count=0, j=0, flag=0;
+  char temp[16+1];
+  for(i=0; str[i]!='\0';i++)  if(str[i]=='%')  count++; //Evaluate number of arguments required to be printed
+  
+  va_list argv;
+  va_start(argv, count);
+  for(i=0,j=0; str[i]!='\0';i++) //Iterate over formatting string
+  {
+    if(str[i]=='%')
+    {
+      //Clear buffer
+      temp[j] = '\0'; 
+      Serial.print(temp);
+      j=0;
+      temp[0] = '\0';
+      
+      //Process argument
+      switch(str[++i])
+      {
+        case 'd': Serial.print(va_arg(argv, int));
+                  break;
+        case 'l': Serial.print(va_arg(argv, long));
+                  break;
+        case 'f': Serial.print(va_arg(argv, double));
+                  break;
+        case 'c': Serial.print((char)va_arg(argv, int));
+                  break;
+        case 's': Serial.print(va_arg(argv, char *));
+                  break;
+        default:  ;
+      };
+    }
+    else 
+    {
+      //Add to buffer
+      temp[j] = str[i];
+      j = (j+1)%16;
+      if(j==0)  //If buffer is full, empty buffer.
+      {
+        temp[16] = '\0';
+        Serial.print(temp);
+        temp[0]='\0';
+      }
+    }
+  };
+  
+  Serial.println(); //Print trailing newline
+  return count + 1; //Return number of arguments detected
+}
+

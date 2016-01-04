@@ -17,6 +17,7 @@ January 1st 2016   : "MTC ( MicroProcessor Time Clock )" and Max Time Values
 January 2nd 2016   : Storage Update for MTC, Now MultiStores S,M,H,D and Y and Linerization Added to Calculations
 ->January 2nd 2016 : Daniel Schimmer -> Inserted before the predicted January 3rd update! ;) - Play around formatting and 'optimization'
 January 3rd 2016   : Storage Array for Average Values
+->January 3rd 2016 : Daniel Schimmer -> Had to ditch petit fat as it does not create files (or resize them).  Trying SdFat...
 
 Sketch stats before:
 
@@ -31,11 +32,13 @@ Global variables use 934 bytes (36%) of dynamic memory, leaving 1,626 bytes for 
 Still playing.....
 
 -------------------------------------------------------------------------------------------------------*/
-#include "PetitFS.h"
+#include <SdFat.h>
 #include <SPI.h>
 
 // Petite FS
-FATFS fs;
+SdFat SD;
+
+#define SD_CS_PIN 4
 
 //Pin Setup and Calculation Data
 #define StatusLed 13
@@ -69,11 +72,11 @@ const int VoltageOffset = 1;
 //This is the "MTC ( MicroProcessor Time Clock )" Setup
 const int CalcTimeOffset = 59; //mS, +50mS for LED Flash, The Offset to Correct for a Second of Time
 
-const int SecondCount_Max = 60;  //60 Sec per Min
-const int MinuteCount_Max = 60; //60 Min per Hour
-const int HourCount_Max = 24;    //24 Hours per Day
-const int DayCount_Max = 365;    //365 Days per Year
-const int YearCount_Max = 10;    //10 Years worth of Logs....
+const int SecondCount_Max = 59;  //60 Sec per Min
+const int MinuteCount_Max = 59; //60 Min per Hour
+const int HourCount_Max = 23;    //24 Hours per Day
+const int DayCount_Max = 364;    //365 Days per Year
+const int YearCount_Max = 9;    //10 Years worth of Logs....
 
 uint32_t time_in_seconds = 0;
 
@@ -84,12 +87,13 @@ void setup() {
   Serial.begin(9600);
 
   digitalWrite(StatusLed, HIGH);
-  delay(5000); //while (!Serial) { }
+  //delay(5000); //while (!Serial) { }
+  while (!Serial) { }
   digitalWrite(StatusLed, LOW);
 
   debug("Full Mode Initialiazation");
     
-  if (pf_mount(&fs)) {
+  if (SD.begin(SD_CS_PIN)) {
     debug("Card failed, or not present");
     return;
   }
@@ -278,16 +282,17 @@ void loop() {
   // XXX: Need to look at these ifs after changing time determination....funny assumption here...
   
   //Datalog the Data that I Captured each Second;
-  if (seconds < SecondCount_Max) {
+  if (seconds <= SecondCount_Max) {
     // Second Tick Capture
     writeLog(F("sec.txt"), dataString);
   }
-
-  if (seconds >= SecondCount_Max) { //Second Tick 60s Meaning 1 Min Capture
+debug("the thing is %d, %d", (time_in_seconds % 60), (time_in_seconds % 3600));
+  if ((time_in_seconds % 60) == 0) { //Second Tick 60s Meaning 1 Min Capture
     writeLog(F("min.txt"), dataString);
   }
 
-  if (minutes >= MinuteCount_Max) {
+  if ((time_in_seconds % 3600) == 0) { //Second Tick 60s Meaning 1 Min Capture
+  //if (minutes >= MinuteCount_Max) {
     //Min Tick 60m Meaning 1 Hour Capture
     writeLog(F("hour.txt"), dataString);
   }
@@ -324,23 +329,29 @@ void loop() {
     time_in_seconds += 30;
   }
   else {
-    delay(60000 - CalcTimeOffset);  //I Dunno what the stare of the System is...
-    time_in_seconds += 60;
+    //delay(60000 - CalcTimeOffset);  //I Dunno what the stare of the System is...
+    //time_in_seconds += 60;
+    delay(1000 - CalcTimeOffset);
+    time_in_seconds += 1;
   }
 }
 
 void writeLog(const __FlashStringHelper *fsh, String dataString) {
-  //File datafile = SD.open(fileName, FILE_WRITE);
+  
   char fileName[32];
 
   // XXX: find a safe..err smarter...er intell....err non-potential-boom-boom way of doing this..BOOM
   strcpy_P(fileName, (PGM_P)fsh);
 
-  int result = pf_open(fileName);
+  //int result = pf_open(fileName);
   
-  if (result == FR_OK) {
+  File datafile = SD.open(fileName, FILE_WRITE);
+  
+  if (datafile) {
       //datafile.println(dataString);
-      pf_write(dataString.c_str(), 0, 0);
+      //pf_write(dataString.c_str(), 0, 0);
+      datafile.println(dataString);
+      datafile.close();
 
       debug("Updated %s", fileName);
     
@@ -349,60 +360,152 @@ void writeLog(const __FlashStringHelper *fsh, String dataString) {
       debug(dataString.c_str());
     }
   } else {
-    debug("Error Opening %s, %d", fileName, result);
+    debug("Error Opening %s", fileName);
   }
 }
 
-// handles nastyness of logging with serial, needs work.
-int debug(const char *str, ...) //Variadic Function
+#if 0
+#define BUFFER_SIZE 32
+int debug(const char *str, ...)
 {
-  int i, count=0, j=0, flag=0;
-  char temp[16+1];
-  for(i=0; str[i]!='\0';i++)  if(str[i]=='%')  count++; //Evaluate number of arguments required to be printed
+  int count = 0, flag = 0;
+  char temp[BUFFER_SIZE + 1];
+
+  // Count number of arguments required to be printed
+  for(int i=0; str[i] != '\0'; i++) {
+    if(str[i]=='%') {
+      count++;
+    }
+  }
   
   va_list argv;
-  va_start(argv, count);
-  for(i=0,j=0; str[i]!='\0';i++) //Iterate over formatting string
-  {
-    if(str[i]=='%')
-    {
-      //Clear buffer
+  //va_start(argv, count);
+  va_start(argv, str);
+  for(int i=0, j=0; str[i]!= '\0'; i++) {
+    if(str[i]=='%') {
       temp[j] = '\0'; 
-      Serial.print(temp);
+      if (Serial) Serial.print(temp);
       j=0;
       temp[0] = '\0';
-      
-      //Process argument
-      switch(str[++i])
-      {
-        case 'd': Serial.print(va_arg(argv, int));
-                  break;
-        case 'l': Serial.print(va_arg(argv, long));
-                  break;
-        case 'f': Serial.print(va_arg(argv, double));
-                  break;
-        case 'c': Serial.print((char)va_arg(argv, int));
-                  break;
-        case 's': Serial.print(va_arg(argv, char *));
-                  break;
-        default:  ;
-      };
-    }
-    else 
-    {
-      //Add to buffer
+
+      switch(str[++i]) {
+        case 'd': 
+          if (Serial) Serial.print(va_arg(argv, int));
+          break;
+        case 'l':
+          if (Serial) Serial.print(va_arg(argv, long));
+          break;
+        case 'f':
+          if (Serial) Serial.print(va_arg(argv, double));
+          break;
+        case 'c':
+          if (Serial) Serial.print((char)va_arg(argv, int));
+          break;
+        case 's':
+          if (Serial) Serial.print(va_arg(argv, char *));
+          break;
+        default:
+          break;
+      }
+    } else {
       temp[j] = str[i];
-      j = (j+1)%16;
-      if(j==0)  //If buffer is full, empty buffer.
-      {
-        temp[16] = '\0';
-        Serial.print(temp);
-        temp[0]='\0';
+      j = (j+1) % BUFFER_SIZE;
+      
+      if(j==0) {
+        temp[BUFFER_SIZE] = '\0';
+        if (Serial) Serial.print(temp);
+        temp[0] = '\0';
       }
     }
-  };
+  }
   
-  Serial.println(); //Print trailing newline
-  return count + 1; //Return number of arguments detected
+  if (Serial) Serial.println();
+
+  return count + 1;
+}
+#else
+
+#if 0
+
+#define PRINTF_BUF 80 // define the tmp buffer size (change if desired)
+void debug(const char *format, ...) {
+  char buf[PRINTF_BUF];
+   va_list ap;
+        va_start(ap, format);
+        vsnprintf(buf, sizeof(buf), format, ap);
+#if 0
+        for(char *p = &buf[0]; *p; p++) // emulate cooked mode for newlines
+        {
+                if(*p == '\n') {
+                  //write('\r');
+                  if (Serial) Serial.print('\r');
+                }
+                
+                //write(*p);
+                if (Serial) Serial.print(*p);
+        }
+#else
+    if (Serial) Serial.println(buf);
+#endif
+
+        va_end(ap);
 }
 
+#else
+
+// another crack....
+int vsnprintf2(char *str, size_t str_m, const char *fmt, va_list ap) {
+  size_t str_l = 0;
+  const char *p = fmt;
+
+  if (!p) p = "";
+
+  while (*p) {
+    if (*p != '%') {
+      // this seems to be a faster method when there are very little
+      // conversions....
+
+      const char *q = strchr(p + 1, '%');
+      size_t n = !q ? strlen(p) : (q - p);
+
+      if (str_l < str_m) {
+        size_t avail = str_m - str_l;
+        memcpy(str + str_l, p, (n > avail ? avail : n));
+      }
+      p += n; str_l += n;
+    } else {
+      p++; // skip the '%'
+      p++; // skip the other thing test...
+
+      str_l += 2;
+    }
+  }
+
+  // lets ensure that we have a trailing null...
+  // this could overrite something but oh well..
+  str[ str_l <= str_m - 1 ? str_l : str_m - 1] = '\0';
+
+
+  return str_l;
+}
+
+#define PRINTF_BUF 80 // 80 should be good enough for some simple debug....
+void debug(const char *fmt, ...) {
+  char buf[PRINTF_BUF];
+  va_list ap;
+  
+  va_start(ap, fmt);
+if (Serial) Serial.println("enter test");
+  // need to support floats some how, not ?
+  //vsnprintf(buf, sizeof(buf), fmt, ap);
+  vsnprintf2(buf, sizeof(buf), fmt, ap);
+if (Serial) Serial.println("exit test");
+  if (Serial) Serial.println(buf);
+  
+  va_end(ap);
+}
+
+#endif
+
+
+#endif

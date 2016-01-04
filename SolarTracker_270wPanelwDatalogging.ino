@@ -42,14 +42,18 @@ Still playing.....
 
 After eliminating PetitFS and using SdFat
 
-ketch uses 19,296 bytes (67%) of program storage space. Maximum is 28,672 bytes.
-Global variables use 1,388 bytes (54%) of dynamic memory, leaving 1,172 bytes for local variables. Maximum is 2,560 bytes.
+Sketch uses 17,686 bytes (61%) of program storage space. Maximum is 28,672 bytes.
+Global variables use 1,384 bytes (54%) of dynamic memory, leaving 1,176 bytes for local variables. Maximum is 2,560 bytes.
+
+Latest (Need some regroup)
+
+Sketch uses 18,232 bytes (63%) of program storage space. Maximum is 28,672 bytes.
+Global variables use 1,538 bytes (60%) of dynamic memory, leaving 1,022 bytes for local variables. Maximum is 2,560 bytes.
 
 -------------------------------------------------------------------------------------------------------*/
 #include <SdFat.h>
 #include <SPI.h>
 
-// Petite FS
 SdFat SD;
 
 #define SD_CS_PIN 4
@@ -108,6 +112,26 @@ void setup() {
   }
 
   debug("Card Save Enabled.");
+
+  // init the files.
+  char dataString[128];
+
+  //dataString = F("Year/Day/Hour/Minute/Second/LipoBat_V/LeadAcidBat_V/SolarPanel_V/SolarPanel_I/SolarPanel_W/Temperature/Humidity.");
+  snprintf2(dataString, sizeof(dataString), "Year/Day/Hour/Minute/Second/LipoBat_V/LeadAcidBat_V/SolarPanel_V/SolarPanel_I/SolarPanel_W/Temperature/Humidity.");
+
+  // remove the current batch...(maybe optional?)
+  SD.remove("sec.txt");
+  SD.remove("min.txt");
+  SD.remove("hour.txt");
+  SD.remove("day.txt");
+  SD.remove("year.txt");
+
+  // write the header....
+  writeLog(F("sec.txt"), dataString);
+  writeLog(F("min.txt"), dataString);
+  writeLog(F("hour.txt"), dataString);
+  writeLog(F("day.txt"), dataString);
+  writeLog(F("year.txt"), dataString);
   
   digitalWrite(StatusLed, HIGH);
   delay(2000);
@@ -278,16 +302,11 @@ void loop() {
   //Datalog Spreadsheet Setup ------------------------------------------------------------------------------------------------------------------
 
   char dataString[128];
-
-  if(time_in_seconds < 0) { //Startup Print Values?
-    //dataString = F("Year/Day/Hour/Minute/Second/LipoBat_V/LeadAcidBat_V/SolarPanel_V/SolarPanel_I/SolarPanel_W/Temperature/Humidity.");
-    
-  } else { //Normal Operation
-    snprintf2(dataString, sizeof(dataString), "%d/%d/%d/%d/%d/%f/%f/%f/%f/%f/%d/%d.",
-      years, days, hours, minutes, seconds,
-      MeasuredVBatLipo, MeasuredVBatLeadAcid, 
-      MeasureVSolarPanel, MeasureISolarPanel, MeasureWSolarPanel, 0, 0); 
-  }
+  
+  snprintf2(dataString, sizeof(dataString), "%d/%d/%d/%d/%d/%f/%f/%f/%f/%f/%d/%d.",
+    years, days, hours, minutes, seconds,
+    MeasuredVBatLipo, MeasuredVBatLeadAcid, 
+    MeasureVSolarPanel, MeasureISolarPanel, MeasureWSolarPanel, 0, 0); 
   
   // always log seconds...
   writeLog(F("sec.txt"), dataString);
@@ -308,9 +327,7 @@ void loop() {
   }
 
   // log on the year
-  // i think the math is wrong on this one..
-  // XXX: fix i think it logs all the time...
-  if ((time_in_seconds % 0x1E13380)) {
+  if ((time_in_seconds % 0x1E13380) == 0) {
     writeLog(F("year.txt"), dataString);
   }
 
@@ -346,28 +363,21 @@ void loop() {
   }
 }
 
-void writeLog(const __FlashStringHelper *fsh, String dataString) {
-  
+void writeLog(const __FlashStringHelper *fsh, const char *dataString) { 
   char fileName[32];
 
-  // XXX: find a safe..err smarter...er intell....err non-potential-boom-boom way of doing this..BOOM
   strcpy_P(fileName, (PGM_P)fsh);
 
-  //int result = pf_open(fileName);
-  
   File datafile = SD.open(fileName, FILE_WRITE);
   
   if (datafile) {
-      //datafile.println(dataString);
-      //pf_write(dataString.c_str(), 0, 0);
-      datafile.println(dataString);
-      datafile.close();
-
-      debug("Updated %s", fileName);
+    datafile.println(dataString);
+    datafile.close();
     
-
+    debug("Updated %s", fileName);
+    
     if (Debug) {
-      debug(dataString.c_str());
+      debug(dataString);
     }
   } else {
     debug("Error Opening %s", fileName);

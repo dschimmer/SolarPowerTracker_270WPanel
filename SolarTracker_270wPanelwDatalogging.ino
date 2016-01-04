@@ -475,9 +475,38 @@ int vsnprintf2(char *str, size_t str_m, const char *fmt, va_list ap) {
       p += n; str_l += n;
     } else {
       p++; // skip the '%'
+
+      // this bit is a bit naive...i'm assuming currently no format specifiers.
+      char fmt_spec = '\0';
+
+      fmt_spec = *p;
+
+      switch (fmt_spec) {
+        case 'd':
+        case 'u':
+        case 'o':
+        case 'x':
+        case 'X':
+        case 'p':
+          // XXX: probably should handle 'D','U','O','i' too..
+          break;
+
+        case 'f':
+          // the reason we're here....
+          double f = va_arg(ap, double);
+
+          char buffer[20];
+          char *s = dtostrf(f, 10, 6, buffer);
+
+          str_l += sprintf(str + str_l, "%s", buffer);    
+
+          break;
+      }
+
+      
       p++; // skip the other thing test...
 
-      str_l += 2;
+      
     }
   }
 
@@ -495,11 +524,11 @@ void debug(const char *fmt, ...) {
   va_list ap;
   
   va_start(ap, fmt);
-if (Serial) Serial.println("enter test");
+
   // need to support floats some how, not ?
   //vsnprintf(buf, sizeof(buf), fmt, ap);
   vsnprintf2(buf, sizeof(buf), fmt, ap);
-if (Serial) Serial.println("exit test");
+
   if (Serial) Serial.println(buf);
   
   va_end(ap);

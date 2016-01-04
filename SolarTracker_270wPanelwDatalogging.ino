@@ -46,10 +46,13 @@ SdFat SD;
 #define VBatLeadAcid A2
 #define VSolar A0
 #define ISolar A1
-  
+
+
+/*
 String dataString = "";
 const String Split = "/";
 const String End = ".";
+*/
 
 float MeasuredVBatLipo;
 float MeasuredVBatLeadAcid;
@@ -248,8 +251,8 @@ void loop() {
 
     debug("-------------------------------");
     debug("Solar Panel Voltage : %f", MeasureVSolarPanel);
-    debug("Solar Panel Current : %2f", MeasureISolarPanel);
-    debug("Solar Panel Wattage : %2f", MeasureWSolarPanel);
+    debug("Solar Panel Current : %f", MeasureISolarPanel);
+    debug("Solar Panel Wattage : %f", MeasureWSolarPanel);
     
     if (!PanelUnderChargeVoltage && !PanelAtChargeVoltage && !PanelOverChargeVoltage) {
       debug("No Solar Panel Found");
@@ -268,15 +271,26 @@ void loop() {
 
   //Datalog Spreadsheet Setup ------------------------------------------------------------------------------------------------------------------
 
+  char dataString[128];
+
   if(time_in_seconds < 0) { //Startup Print Values?
-    dataString = F("Year/Day/Hour/Minute/Second/LipoBat_V/LeadAcidBat_V/SolarPanel_V/SolarPanel_I/SolarPanel_W/Temperature/Humidity.");
+    //dataString = F("Year/Day/Hour/Minute/Second/LipoBat_V/LeadAcidBat_V/SolarPanel_V/SolarPanel_I/SolarPanel_W/Temperature/Humidity.");
+    
   } else { //Normal Operation
+#if 0
   //Storage Array :   Year,                       Day,                       Hour,                       Minute,
     dataString = String(years) + Split + String(days) + Split + String(hours) + Split + String(minutes) + Split + 
     //     Second,                       LipoBat_V,                         LeadAcidBat_V,                         SolarPanel_V,
     String(seconds) + Split + String(MeasuredVBatLipo) + Split + String(MeasuredVBatLeadAcid) + Split + String(MeasureVSolarPanel) + Split +
     //     SolarPanel_I,                        SolarPanel_W,                        Temperature,        Humidity.
     String(MeasureISolarPanel) + Split + String(MeasureWSolarPanel) + Split + String(0) + Split + String(0) + End;
+#else
+    snprintf2(dataString, sizeof(dataString), "%d/%d/%d/%d/%d/%f/%f/%f/%f/%f/%d/%d.",
+      years, days, hours, minutes, seconds,
+      MeasuredVBatLipo, MeasuredVBatLeadAcid, 
+      MeasureVSolarPanel, MeasureISolarPanel, MeasureWSolarPanel, 0, 0);
+
+#endif    
   }
 
   // XXX: Need to look at these ifs after changing time determination....funny assumption here...
@@ -425,33 +439,19 @@ int debug(const char *str, ...)
 }
 #else
 
-#if 0
+int snprintf2(char *str, size_t str_m, const char *fmt, ...) {
+  va_list ap;
+  
+  va_start(ap, fmt);
 
-#define PRINTF_BUF 80 // define the tmp buffer size (change if desired)
-void debug(const char *format, ...) {
-  char buf[PRINTF_BUF];
-   va_list ap;
-        va_start(ap, format);
-        vsnprintf(buf, sizeof(buf), format, ap);
-#if 0
-        for(char *p = &buf[0]; *p; p++) // emulate cooked mode for newlines
-        {
-                if(*p == '\n') {
-                  //write('\r');
-                  if (Serial) Serial.print('\r');
-                }
-                
-                //write(*p);
-                if (Serial) Serial.print(*p);
-        }
-#else
-    if (Serial) Serial.println(buf);
-#endif
+  // need to support floats some how, not ?
+  //vsnprintf(buf, sizeof(buf), fmt, ap);
+  int result = vsnprintf2(str, str_m, fmt, ap);
 
-        va_end(ap);
+  va_end(ap);
+
+  return result;
 }
-
-#else
 
 // another crack....
 int vsnprintf2(char *str, size_t str_m, const char *fmt, va_list ap) {
@@ -488,25 +488,52 @@ int vsnprintf2(char *str, size_t str_m, const char *fmt, va_list ap) {
         case 'x':
         case 'X':
         case 'p':
-          // XXX: probably should handle 'D','U','O','i' too..
+          {
+            // XXX: probably should handle 'D','U','O','i' too..
+            int num = va_arg(ap, int);
+
+            // long?
+            char buffer[2 + 3 * sizeof(int)];
+            itoa(num, buffer, 10);
+
+            size_t n = strlen(buffer);
+            memcpy(str + str_l, buffer, n);
+  
+            str_l += n;
+          }
           break;
 
         case 'f':
-          // the reason we're here....
-          double f = va_arg(ap, double);
+          {
+            // the reason we're here....
+            double f = va_arg(ap, double);
+  
+            char buffer[20];
+            char *s = dtostrf(f, 10, 6, buffer);
+  
+            //str_l += sprintf(str + str_l, "%s", buffer);    
+            size_t n = strlen(buffer);
+            memcpy(str + str_l, buffer, n);
+  
+            str_l += n;
+          }
+          break;
+          
+        case 's':
+            {
+              char *s = va_arg(ap, char *);
+              size_t n = strlen(s);
+              memcpy(str + str_l, s, n);
+  
+              str_l += n;
+            }
+            break;
 
-          char buffer[20];
-          char *s = dtostrf(f, 10, 6, buffer);
-
-          str_l += sprintf(str + str_l, "%s", buffer);    
-
+        default:
           break;
       }
 
-      
-      p++; // skip the other thing test...
-
-      
+      p++;      
     }
   }
 
@@ -533,8 +560,5 @@ void debug(const char *fmt, ...) {
   
   va_end(ap);
 }
-
-#endif
-
 
 #endif

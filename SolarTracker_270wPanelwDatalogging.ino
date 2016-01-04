@@ -15,21 +15,35 @@ December 30th 2015 : Data Poll, Calculations and Storage
 December 31st 2015 : Cleanup of Storage and Started MultiStore
 January 1st 2016   : "MTC ( MicroProcessor Time Clock )" and Max Time Values
 January 2nd 2016   : Storage Update for MTC, Now MultiStores S,M,H,D and Y and Linerization Added to Calculations
-->January 2nd 2016 : Daniel Schimmer -> Inserted before the predicted January 3rd update! ;) - Play around formatting and 'optimization'
+-> January 2nd 2016 : Daniel Schimmer -> Inserted before the predicted January 3rd update! ;) - Play around formatting and 'optimization'
 January 3rd 2016   : Storage Array for Average Values
-->January 3rd 2016 : Daniel Schimmer -> Had to ditch petit fat as it does not create files (or resize them).  Trying SdFat...
+-> January 3rd 2016 : Daniel Schimmer -> 
+                         Had to ditch petit fat as it does not create files (or resize them).  Trying SdFat...
+                         Created vsnprintf2 and snprintf2, seems to shrink code down. 
+                         Eliminate String class usage.  Just looks goofy.... (IMO :) plus saves 3% code space...bizarre)
+                         Quick pass at times.
+                         Fix spelling mistakes.
+
+                         TODO: Should fix the fact that we're just appending to the existing.. I think this would make graphs look silly.
+                         TODO: Fix int handling in vsnprintf, sort of just did a quickie on that, need to handle other specifiers.
+                               Currently smaller than the official (4% increase in size, and doesn't print floats)
 
 Sketch stats before:
 
 Sketch uses 24,296 bytes (84%) of program storage space. Maximum is 28,672 bytes.
 Global variables use 1,782 bytes (69%) of dynamic memory, leaving 778 bytes for local variables. Maximum is 2,560 bytes.
 
-Sketch stats now:
+Sketch stats with PetitFS:
 
 Sketch uses 17,480 bytes (60%) of program storage space. Maximum is 28,672 bytes.
 Global variables use 934 bytes (36%) of dynamic memory, leaving 1,626 bytes for local variables. Maximum is 2,560 bytes.
 
 Still playing.....
+
+After eliminating PetitFS and using SdFat
+
+ketch uses 19,296 bytes (67%) of program storage space. Maximum is 28,672 bytes.
+Global variables use 1,388 bytes (54%) of dynamic memory, leaving 1,172 bytes for local variables. Maximum is 2,560 bytes.
 
 -------------------------------------------------------------------------------------------------------*/
 #include <SdFat.h>
@@ -46,13 +60,6 @@ SdFat SD;
 #define VBatLeadAcid A2
 #define VSolar A0
 #define ISolar A1
-
-
-/*
-String dataString = "";
-const String Split = "/";
-const String End = ".";
-*/
 
 float MeasuredVBatLipo;
 float MeasuredVBatLeadAcid;
@@ -75,12 +82,8 @@ const int VoltageOffset = 1;
 //This is the "MTC ( MicroProcessor Time Clock )" Setup
 const int CalcTimeOffset = 59; //mS, +50mS for LED Flash, The Offset to Correct for a Second of Time
 
-const int SecondCount_Max = 59;  //60 Sec per Min
-const int MinuteCount_Max = 59; //60 Min per Hour
-const int HourCount_Max = 23;    //24 Hours per Day
-const int DayCount_Max = 364;    //365 Days per Year
-const int YearCount_Max = 9;    //10 Years worth of Logs....
-
+// This the accumalted time in seconds since we started.
+// Used to determine when we write to files, and the timestamp that goes into them
 uint32_t time_in_seconds = 0;
 
 //---------------------------------------------------------------------------------------------------------------------------------------
@@ -90,13 +93,16 @@ void setup() {
   Serial.begin(9600);
 
   digitalWrite(StatusLed, HIGH);
-  //delay(5000); //while (!Serial) { }
-  while (!Serial) { }
+
+  // wait for serial for about 5 seconds
+  uint32_t startMillis = millis();
+  while (!Serial && (millis() - startMillis) < 10000) ;
+  
   digitalWrite(StatusLed, LOW);
 
   debug("Full Mode Initialiazation");
     
-  if (SD.begin(SD_CS_PIN)) {
+  if (!SD.begin(SD_CS_PIN)) {
     debug("Card failed, or not present");
     return;
   }
@@ -226,9 +232,9 @@ void loop() {
     PanelAtChargeVoltage = false;
     PanelOverChargeVoltage = false;
   }
-  
 
   //Serial Out the Values ------------------------------------------------------------------------------------------------------------------
+  
   if (Serial) {
     debug("");
     debug("********************************");
@@ -277,53 +283,41 @@ void loop() {
     //dataString = F("Year/Day/Hour/Minute/Second/LipoBat_V/LeadAcidBat_V/SolarPanel_V/SolarPanel_I/SolarPanel_W/Temperature/Humidity.");
     
   } else { //Normal Operation
-#if 0
-  //Storage Array :   Year,                       Day,                       Hour,                       Minute,
-    dataString = String(years) + Split + String(days) + Split + String(hours) + Split + String(minutes) + Split + 
-    //     Second,                       LipoBat_V,                         LeadAcidBat_V,                         SolarPanel_V,
-    String(seconds) + Split + String(MeasuredVBatLipo) + Split + String(MeasuredVBatLeadAcid) + Split + String(MeasureVSolarPanel) + Split +
-    //     SolarPanel_I,                        SolarPanel_W,                        Temperature,        Humidity.
-    String(MeasureISolarPanel) + Split + String(MeasureWSolarPanel) + Split + String(0) + Split + String(0) + End;
-#else
     snprintf2(dataString, sizeof(dataString), "%d/%d/%d/%d/%d/%f/%f/%f/%f/%f/%d/%d.",
       years, days, hours, minutes, seconds,
       MeasuredVBatLipo, MeasuredVBatLeadAcid, 
-      MeasureVSolarPanel, MeasureISolarPanel, MeasureWSolarPanel, 0, 0);
-
-#endif    
+      MeasureVSolarPanel, MeasureISolarPanel, MeasureWSolarPanel, 0, 0); 
   }
-
-  // XXX: Need to look at these ifs after changing time determination....funny assumption here...
   
-  //Datalog the Data that I Captured each Second;
-  if (seconds <= SecondCount_Max) {
-    // Second Tick Capture
-    writeLog(F("sec.txt"), dataString);
-  }
-debug("the thing is %d, %d", (time_in_seconds % 60), (time_in_seconds % 3600));
-  if ((time_in_seconds % 60) == 0) { //Second Tick 60s Meaning 1 Min Capture
+  // always log seconds...
+  writeLog(F("sec.txt"), dataString);
+
+  // log on the minute
+  if ((time_in_seconds % 0x3C) == 0) {
     writeLog(F("min.txt"), dataString);
   }
 
-  if ((time_in_seconds % 3600) == 0) { //Second Tick 60s Meaning 1 Min Capture
-  //if (minutes >= MinuteCount_Max) {
-    //Min Tick 60m Meaning 1 Hour Capture
+  // log on the hour
+  if ((time_in_seconds % 0xE10) == 0) {
     writeLog(F("hour.txt"), dataString);
   }
 
-  if (hours >= HourCount_Max) {
-    //Hour Tick 24h Meaning 1 Day Capture
+  // log on the day
+  if ((time_in_seconds % 0x15180) == 0) {
     writeLog(F("day.txt"), dataString);
   }
 
-  if (days >= DayCount_Max) {
-    //Day Tick 365d Meaning 1 Year Capture
+  // log on the year
+  // i think the math is wrong on this one..
+  // XXX: fix i think it logs all the time...
+  if ((time_in_seconds % 0x1E13380)) {
     writeLog(F("year.txt"), dataString);
   }
 
   //YearCount >= YearCount_Max //Year Tick 10y Meaning 1 Decade?
   
   //End Data Poll ------------------------------------------------------------------------------------------
+
   digitalWrite(StatusLed, LOW);
   
   if (PanelAtChargeVoltage && !LipoUnderChargedVoltage) {
@@ -343,10 +337,12 @@ debug("the thing is %d, %d", (time_in_seconds % 60), (time_in_seconds % 3600));
     time_in_seconds += 30;
   }
   else {
-    //delay(60000 - CalcTimeOffset);  //I Dunno what the stare of the System is...
-    //time_in_seconds += 60;
-    delay(1000 - CalcTimeOffset);
-    time_in_seconds += 1;
+    delay(60000 - CalcTimeOffset);  //I Dunno what the stare of the System is...
+    time_in_seconds += 60;
+
+    // Dan's test values...
+    //delay(1000 - CalcTimeOffset);
+    //time_in_seconds += 1;
   }
 }
 
@@ -377,67 +373,6 @@ void writeLog(const __FlashStringHelper *fsh, String dataString) {
     debug("Error Opening %s", fileName);
   }
 }
-
-#if 0
-#define BUFFER_SIZE 32
-int debug(const char *str, ...)
-{
-  int count = 0, flag = 0;
-  char temp[BUFFER_SIZE + 1];
-
-  // Count number of arguments required to be printed
-  for(int i=0; str[i] != '\0'; i++) {
-    if(str[i]=='%') {
-      count++;
-    }
-  }
-  
-  va_list argv;
-  //va_start(argv, count);
-  va_start(argv, str);
-  for(int i=0, j=0; str[i]!= '\0'; i++) {
-    if(str[i]=='%') {
-      temp[j] = '\0'; 
-      if (Serial) Serial.print(temp);
-      j=0;
-      temp[0] = '\0';
-
-      switch(str[++i]) {
-        case 'd': 
-          if (Serial) Serial.print(va_arg(argv, int));
-          break;
-        case 'l':
-          if (Serial) Serial.print(va_arg(argv, long));
-          break;
-        case 'f':
-          if (Serial) Serial.print(va_arg(argv, double));
-          break;
-        case 'c':
-          if (Serial) Serial.print((char)va_arg(argv, int));
-          break;
-        case 's':
-          if (Serial) Serial.print(va_arg(argv, char *));
-          break;
-        default:
-          break;
-      }
-    } else {
-      temp[j] = str[i];
-      j = (j+1) % BUFFER_SIZE;
-      
-      if(j==0) {
-        temp[BUFFER_SIZE] = '\0';
-        if (Serial) Serial.print(temp);
-        temp[0] = '\0';
-      }
-    }
-  }
-  
-  if (Serial) Serial.println();
-
-  return count + 1;
-}
-#else
 
 int snprintf2(char *str, size_t str_m, const char *fmt, ...) {
   va_list ap;
@@ -509,7 +444,7 @@ int vsnprintf2(char *str, size_t str_m, const char *fmt, va_list ap) {
             double f = va_arg(ap, double);
   
             char buffer[20];
-            char *s = dtostrf(f, 10, 6, buffer);
+            char *s = dtostrf(f, 4, 2, buffer);
   
             //str_l += sprintf(str + str_l, "%s", buffer);    
             size_t n = strlen(buffer);
@@ -561,4 +496,3 @@ void debug(const char *fmt, ...) {
   va_end(ap);
 }
 
-#endif
